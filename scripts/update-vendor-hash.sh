@@ -1,88 +1,67 @@
 #!/usr/bin/env bash
-# Script to update Go vendor hashes in package.nix
-# This script is used by the GitHub workflow to handle vendorHash updates
+# Recover platform release hashes in package.nix after a version bump.
+# Used when nix-update cannot fill all fetchzip hashes automatically.
 
 set -euo pipefail
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-echo "Attempting to update vendor hashes..."
+echo "Attempting to update release asset hashes..."
 
-# Function to extract hash from error message
-extract_hash_from_error() {
-    local error_output="$1"
-    # Look for "got: sha256-..." pattern in the error
-    echo "$error_output" | grep -oP 'got:\s+sha256-[A-Za-z0-9+/]+=*' | sed 's/got:\s*//'
-}
+VERSION=$(grep -oP 'version = "\K[^"]+' package.nix | head -1)
+echo "Version: $VERSION"
 
-# Function to update vendorHash in package.nix
-update_vendor_hash() {
-    local old_hash="$1"
-    local new_hash="$2"
-    
-    echo -e "${YELLOW}Updating vendorHash from:${NC}"
-    echo "  $old_hash"
-    echo -e "${YELLOW}to:${NC}"
-    echo "  $new_hash"
-    
-    # Update the vendorHash in package.nix
-    sed -i "s|vendorHash = \"$old_hash\"|vendorHash = \"$new_hash\"|" package.nix
-    
-    if grep -q "$new_hash" package.nix; then
-        echo -e "${GREEN}Successfully updated vendorHash${NC}"
-        return 0
-    else
-        echo -e "${RED}Failed to update vendorHash${NC}"
-        return 1
-    fi
-}
+BASE="https://github.com/anomalyco/opencode/releases/download/v${VERSION}"
+declare -A ASSETS=(
+  ["x86_64-linux"]="opencode-linux-x64-baseline.tar.gz"
+  ["aarch64-linux"]="opencode-linux-arm64.tar.gz"
+  ["aarch64-darwin"]="opencode-darwin-arm64.zip"
+  ["x86_64-darwin"]="opencode-darwin-x64-baseline.zip"
+)
 
-# Try to build and capture any hash mismatch errors
-echo "Building package to check for hash mismatches..."
-BUILD_OUTPUT=$(nix build .#opencode 2>&1) || BUILD_FAILED=$?
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
 
-if [ "${BUILD_FAILED:-0}" -ne 0 ]; then
-    # Check if it's a hash mismatch error
-    if echo "$BUILD_OUTPUT" | grep -q "hash mismatch in fixed-output derivation"; then
-        echo -e "${YELLOW}Hash mismatch detected, extracting correct hash...${NC}"
-        
-        # Extract the current hash from package.nix
-        CURRENT_VENDOR_HASH=$(grep -oP 'vendorHash = "\K[^"]+' package.nix | head -1)
-        
-        # Extract the correct hash from error
-        NEW_VENDOR_HASH=$(extract_hash_from_error "$BUILD_OUTPUT")
-        
-        if [ -n "$NEW_VENDOR_HASH" ]; then
-            echo -e "${GREEN}Found correct vendorHash: $NEW_VENDOR_HASH${NC}"
-            
-            # Update the vendorHash
-            if update_vendor_hash "$CURRENT_VENDOR_HASH" "$NEW_VENDOR_HASH"; then
-                # Try building again with the new hash
-                echo "Verifying build with new vendorHash..."
-                if nix build .#opencode; then
-                    echo -e "${GREEN}Build successful with updated vendorHash!${NC}"
-                    exit 0
-                else
-                    echo -e "${RED}Build still failing after vendorHash update${NC}"
-                    exit 1
-                fi
-            fi
-        else
-            echo -e "${RED}Could not extract correct hash from error output${NC}"
-            echo "Error output:"
-            echo "$BUILD_OUTPUT"
-            exit 1
-        fi
-    else
-        echo -e "${RED}Build failed but not due to hash mismatch${NC}"
-        echo "$BUILD_OUTPUT"
-        exit 1
-    fi
-else
-    echo -e "${GREEN}Build successful, no hash updates needed${NC}"
-    exit 0
+for system in "${!ASSETS[@]}"; do
+  asset="${ASSETS[$system]}"
+  echo -e "${YELLOW}Fetching ${asset} for ${system}...${NC}"
+  if ! curl -fsSL "${BASE}/${asset}" -o "${tmpdir}/${asset}"; then
+    echo -e "${RED}Failed to download ${asset}${NC}"
+    exit 1
+  fi
+  new_hash=$(nix hash file "${tmpdir}/${asset}")
+  echo "  hash: ${new_hash}"
+
+  # Replace the hash belonging to this system's fetchzip block.
+  # Match the URL line for the asset, then the following hash = "..." line.
+  python3 - "$asset" "$new_hash" <<'PY'
+import re, sys
+asset, new_hash = sys.argv[1], sys.argv[2]
+path = "package.nix"
+text = open(path).read()
+# Within the block that mentions this asset URL, replace hash = "sha256-..."
+pattern = re.compile(
+    r'(url = "[^"]*' + re.escape(asset) + r'";\s*\n\s*hash = ")sha256-[^"]+(")',
+    re.M,
+)
+new_text, n = pattern.subn(r"\1" + new_hash + r"\2", text, count=1)
+if n != 1:
+    sys.stderr.write(f"Could not locate hash for asset {asset} (replacements={n})\n")
+    sys.exit(1)
+open(path, "w").write(new_text)
+print(f"Updated hash for {asset}")
+PY
+done
+
+echo -e "${GREEN}All platform hashes updated. Verifying build...${NC}"
+if nix build .#opencode -L; then
+  ./result/bin/opencode --version || true
+  echo -e "${GREEN}Build successful${NC}"
+  exit 0
 fi
+
+echo -e "${RED}Build failed after hash update${NC}"
+exit 1

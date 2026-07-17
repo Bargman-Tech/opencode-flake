@@ -1,6 +1,6 @@
 # OpenCode Nix Flake
 
-This repository packages [OpenCode](https://github.com/sst/opencode), a terminal-based AI assistant for developers, as a Nix flake. OpenCode is developed by SST (Serverless Stack) and provides powerful AI-powered coding assistance directly in your terminal.
+This repository packages [OpenCode](https://github.com/anomalyco/opencode), a terminal-based AI assistant for developers, as a Nix flake using **prebuilt release binaries**.
 
 This flake automatically stays up-to-date with the latest OpenCode releases through an automated workflow that runs daily.
 
@@ -8,26 +8,26 @@ This flake automatically stays up-to-date with the latest OpenCode releases thro
 
 ```bash
 # Run directly from the flake
-nix run github:aodhanhayter/opencode-flake
+nix run github:Bargman-Tech/opencode-flake
 
 # Check the version
-nix run github:aodhanhayter/opencode-flake -- --version
+nix run github:Bargman-Tech/opencode-flake -- --version
 
 # Install to your profile
-nix profile install github:aodhanhayter/opencode-flake
+nix profile install github:Bargman-Tech/opencode-flake
 ```
 
 ## Installation
 
 ### Profile Installation
 ```bash
-nix profile install github:aodhanhayter/opencode-flake
+nix profile install github:Bargman-Tech/opencode-flake
 ```
 
 ### NixOS/Home Manager Configuration
 ```nix
 {
-  inputs.opencode-flake.url = "github:aodhanhayter/opencode-flake";
+  inputs.opencode-flake.url = "github:Bargman-Tech/opencode-flake";
 
   # In your configuration:
   environment.systemPackages = [ inputs.opencode-flake.packages.${pkgs.system}.default ];
@@ -39,20 +39,16 @@ nix profile install github:aodhanhayter/opencode-flake
 
 ## Packaging
 
-This flake builds OpenCode from source, copying the approach from the official nixpkgs build. If you don't require the latest version of opencode, I recommend using the official nixpkgs version as it will likely be more stable and well tested.
-
-- **Source-based builds**: Fetches source code directly from the [sst/opencode](https://github.com/sst/opencode) repository
-- **Multi-component build system**:
-  - **Go TUI Component**: Builds the terminal UI (`packages/tui`) using `buildGoModule`
-  - **TypeScript Core**: Uses Bun to compile the main application logic
-- **Deterministic builds**: Includes a local models patch to avoid network dependencies during build
-- **Cross-platform support**: Supports all major platforms with proper platform-specific library linking
+- **Prebuilt binaries**: Downloads official release assets from [anomalyco/opencode](https://github.com/anomalyco/opencode)
+- **Baseline x86_64 builds**: Uses non-AVX baseline tarballs for broader CPU compatibility
+- **Patchelf on Linux**: Sets the dynamic linker for Nix store compatibility
+- **Cross-platform**: `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, `aarch64-darwin`
 
 ## Development
 
 ```bash
 # Enter development shell with OpenCode available
-nix develop github:aodhanhayter/opencode-flake
+nix develop github:Bargman-Tech/opencode-flake
 
 # Build locally
 nix build
@@ -66,9 +62,9 @@ nix flake check
 This repository features **fully automated maintenance**:
 
 - **Automatic updates**: GitHub Actions workflow runs daily (06:15 UTC) using `nix-update`
-- **Version detection**: Automatically detects new OpenCode releases from upstream
-- **Auto-deployment**: Updates are automatically tested, tagged, and released
-- **Zero-maintenance**: No manual intervention required for version updates
+- **Version detection**: Detects new OpenCode releases from upstream
+- **Validate-before-push**: Builds and runs `--version` before committing
+- **Auto-deployment**: Updates are tagged and released after validation
 
 ### Workflow Status
 
@@ -79,14 +75,15 @@ This repository features **fully automated maintenance**:
 ### Manual Updates (if needed)
 
 ```bash
-# Force update to latest version
+# Update to latest version (needs nix-update)
 nix-update --flake opencode
+
+# If platform hashes need recovery
+./scripts/update-vendor-hash.sh
 
 # Build and test
 nix build && nix flake check
 ```
-
-**Note**: When OpenCode updates, `nix-update` may fail during the build phase if Go module dependencies have changed. This is normal - check the build logs for the correct `vendorHash` and update `package.nix` manually.
 
 ## Supported Systems
 
@@ -97,10 +94,10 @@ nix build && nix flake check
 
 ## Repository Structure
 
-- `flake.nix`: Clean, minimal flake following nixpkgs patterns
-- `package.nix`: Comprehensive OpenCode package definition with source builds
-- `local-models-dev.patch`: Patch for deterministic builds with local models
-- `.github/workflows/`: Automated CI/CD workflows
+- `flake.nix`: Minimal flake packaging outputs
+- `package.nix`: Prebuilt binary package definition
+- `.github/workflows/update-opencode.yml`: Daily update clockwork
+- `scripts/update-vendor-hash.sh`: Hash recovery helper
 
 ## CI/CD & Automation
 
@@ -108,14 +105,10 @@ nix build && nix flake check
 
 1. **Automated Updates** (`update-opencode.yml`):
    - Runs daily at 06:15 UTC (semi-regular clockwork)
-   - Uses `nix-update` for reliable version detection
+   - Uses `nix-update` for version detection
+   - Validates with `nix build` / `nix flake check` before push
    - Auto-creates releases and tags
-   - Handles errors and cleanup automatically
    - Can be manually triggered via GitHub Actions UI
-
-2. **Build Verification**:
-   - Ensures packages build correctly across all platforms
-   - Validates version reporting and functionality
 
 ## License
 

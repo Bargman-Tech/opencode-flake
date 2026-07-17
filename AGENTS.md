@@ -1,35 +1,32 @@
 # AGENTS.md - OpenCode Nix Flake Development Guide
 
 ## Project Overview
-This repository packages OpenCode (terminal-based AI assistant) as a Nix flake, downloading pre-built binaries from npm registry and creating proper Nix store structure with platform-specific support.
+This repository packages OpenCode (terminal-based AI assistant) as a Nix flake using **prebuilt release binaries** from anomalyco/opencode (pattern aligned with noblepayne/opencode-flake).
 
 ## Build/Test Commands
 - `nix build` - Build the OpenCode package
-- `nix flake check` - Run all flake checks (includes package build, version, binary, and library structure tests)
+- `nix flake check` - Run flake checks (package + version test)
 - `nix run . -- --version` - Test the built OpenCode binary version
 - `nix develop` - Enter development shell with OpenCode available
-- `./scripts/test-workflow.sh` - Test the complete update workflow locally
+- `./scripts/update-vendor-hash.sh` - Recompute all platform release hashes for the version in package.nix
 
 ## Version Updates
-When updating OpenCode version:
-1. Update `opencodeVersion` variable in flake.nix (currently 0.1.157) - this is the single source of truth
-2. Update all hashes in `packageHashes` using `nix-prefetch-url` for each platform package
-3. Convert hashes to SRI format with `nix hash to-sri sha256:{hash}`
-4. Version checks automatically use the same `opencodeVersion` variable - no manual sync needed
+Prefer automated updates:
+```bash
+nix-update --flake opencode
+# or: gh workflow run update-opencode.yml
+```
+Manual:
+1. Bump `version` in `package.nix`
+2. Update each platform `fetchzip` hash (`./scripts/update-vendor-hash.sh`)
+3. `nix build && nix flake check`
 
 ## Code Style & Conventions
 - **Language**: Nix expressions with functional programming style
-- **Formatting**: 2-space indentation, align attributes vertically
-- **Naming**: Use camelCase for variables, kebab-case for package names
-- **Comments**: Use `#` for single-line comments, document complex logic
-- **Imports**: Use `let...in` blocks for local bindings, inherit from inputs explicitly
-- **Error Handling**: Use `throw` for unsupported systems, validate hashes exist
-- **Version Management**: Update both `version` in flake.nix and `packageHashes` when upgrading
-- **Platform Support**: Maintain compatibility across aarch64/x86_64 for darwin/linux
-- **Dependencies**: Use `nativeBuildInputs` for build-time deps, `buildInputs` for runtime
-- **File Structure**: Keep package definition in `package.nix`, main flake config in `flake.nix`
+- **Formatting**: 2-space indentation
+- **File Structure**: Package definition in `package.nix`, flake config in `flake.nix`
+- **Packaging**: Prebuilt binaries only — no source/Bun/Go builds in this flake
 
 ## Testing
 - All changes must pass `nix flake check` before commit
-- Version mismatches between flake.nix (line 37) and expected version (line 47) indicate update needed
-- Use `scripts/test-workflow.sh` to simulate version updates locally
+- Workflow validates build + `--version` before push
