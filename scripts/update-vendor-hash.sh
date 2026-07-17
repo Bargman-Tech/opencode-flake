@@ -1,20 +1,16 @@
 #!/usr/bin/env bash
-# Recover platform release hashes in package.nix after a version bump.
-# Used when nix-update cannot fill all fetchzip hashes automatically.
-
+# Recompute fetchzip hashes for all platform release assets.
+# Uses a temporary fetchzip expression so hashes match package.nix exactly.
 set -euo pipefail
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
-echo "Attempting to update release asset hashes..."
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
 
 VERSION=$(grep -oP 'version = "\K[^"]+' package.nix | head -1)
-echo "Version: $VERSION"
+echo "Version: ${VERSION}"
 
 BASE="https://github.com/anomalyco/opencode/releases/download/v${VERSION}"
+
 declare -A ASSETS=(
   ["x86_64-linux"]="opencode-linux-x64-baseline.tar.gz"
   ["aarch64-linux"]="opencode-linux-arm64.tar.gz"
@@ -22,29 +18,50 @@ declare -A ASSETS=(
   ["x86_64-darwin"]="opencode-darwin-x64-baseline.zip"
 )
 
-tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir"' EXIT
-
-for system in "${!ASSETS[@]}"; do
-  asset="${ASSETS[$system]}"
-  echo -e "${YELLOW}Fetching ${asset} for ${system}...${NC}"
-  if ! curl -fsSL "${BASE}/${asset}" -o "${tmpdir}/${asset}"; then
-    echo -e "${RED}Failed to download ${asset}${NC}"
+prefetch_fetchzip_hash() {
+  local url="$1"
+  local expr
+  # empty outputHash forces Nix to report the correct hash
+  expr=$(cat <<NIX
+let
+  pkgs = import <nixpkgs> {};
+in
+pkgs.fetchzip {
+  url = "${url}";
+  hash = "";
+  stripRoot = false;
+}
+NIX
+)
+  local output
+  if output=$(nix-build --expr "$expr" --no-out-link 2>&1); then
+    echo "Unexpected success prefetching ${url}" >&2
     exit 1
   fi
-  new_hash=$(nix hash file "${tmpdir}/${asset}")
-  echo "  hash: ${new_hash}"
+  local got
+  got=$(echo "$output" | grep -oE 'got:[[:space:]]+sha256-[A-Za-z0-9+/=]+' | head -1 | sed 's/got:[[:space:]]*//')
+  if [[ -z "$got" ]]; then
+    echo "Failed to extract hash for ${url}" >&2
+    echo "$output" >&2
+    exit 1
+  fi
+  echo "$got"
+}
 
-  # Replace the hash belonging to this system's fetchzip block.
-  # Match the URL line for the asset, then the following hash = "..." line.
+for system in x86_64-linux aarch64-linux aarch64-darwin x86_64-darwin; do
+  asset="${ASSETS[$system]}"
+  url="${BASE}/${asset}"
+  echo "Prefetching fetchzip hash for ${asset} (${system})..."
+  new_hash=$(prefetch_fetchzip_hash "$url")
+  echo "  ${system}: ${new_hash}"
+
   python3 - "$asset" "$new_hash" <<'PY'
 import re, sys
 asset, new_hash = sys.argv[1], sys.argv[2]
 path = "package.nix"
 text = open(path).read()
-# Within the block that mentions this asset URL, replace hash = "sha256-..."
 pattern = re.compile(
-    r'(url = "[^"]*' + re.escape(asset) + r'";\s*\n\s*hash = ")sha256-[^"]+(")',
+    r'(url = "[^"]*' + re.escape(asset) + r'";\s*\n(?:\s*#[^\n]*\n)?\s*hash = ")sha256-[^"]+(")',
     re.M,
 )
 new_text, n = pattern.subn(r"\1" + new_hash + r"\2", text, count=1)
@@ -56,12 +73,7 @@ print(f"Updated hash for {asset}")
 PY
 done
 
-echo -e "${GREEN}All platform hashes updated. Verifying build...${NC}"
-if nix build .#opencode -L; then
-  ./result/bin/opencode --version || true
-  echo -e "${GREEN}Build successful${NC}"
-  exit 0
-fi
-
-echo -e "${RED}Build failed after hash update${NC}"
-exit 1
+echo "Verifying build for current system..."
+nix build .#opencode -L --option builders ''
+./result/bin/opencode --version
+echo "All platform hashes updated."
