@@ -3,6 +3,9 @@
   lib,
   fetchzip,
   patchelf,
+  makeBinaryWrapper,
+  ripgrep,
+  sysctl,
   testers,
 }:
 let
@@ -41,7 +44,7 @@ stdenv.mkDerivation (finalAttrs: {
 
   src = srcs.${system} or (throw "unsupported system: ${system}");
 
-  nativeBuildInputs = lib.optionals needsPatchelf [ patchelf ];
+  nativeBuildInputs = [ makeBinaryWrapper ] ++ lib.optionals needsPatchelf [ patchelf ];
 
   dontConfigure = true;
   dontBuild = true;
@@ -50,10 +53,26 @@ stdenv.mkDerivation (finalAttrs: {
 
   installPhase = ''
     runHook preInstall
+
     install -Dm755 opencode $out/bin/opencode
+
     ${lib.optionalString needsPatchelf ''
+      # NixOS: use store dynamic linker so the prebuilt binary can execute
       patchelf --set-interpreter "$(cat $NIX_CC/nix-support/dynamic-linker)" $out/bin/opencode
     ''}
+
+    # Match nixpkgs runtime hardening:
+    # - OPENCODE_DISABLE_AUTOUPDATE: never self-upgrade out from under Nix
+    # - PATH += ripgrep: codebase search / tools that shell out to `rg`
+    wrapProgram $out/bin/opencode \
+      --prefix PATH : ${
+        lib.makeBinPath (
+          [ ripgrep ]
+          ++ lib.optionals stdenv.hostPlatform.isDarwin [ sysctl ]
+        )
+      } \
+      --set OPENCODE_DISABLE_AUTOUPDATE true
+
     runHook postInstall
   '';
 

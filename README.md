@@ -41,7 +41,10 @@ nix profile install github:Bargman-Tech/opencode-flake
 
 - **Prebuilt binaries**: Downloads official release assets from [anomalyco/opencode](https://github.com/anomalyco/opencode)
 - **Baseline x86_64 builds**: Uses non-AVX baseline tarballs for broader CPU compatibility
-- **Patchelf on Linux**: Sets the dynamic linker for Nix store compatibility
+- **NixOS runtime fixups**:
+  - `patchelf` sets the store dynamic linker (Linux)
+  - Wrapper sets `OPENCODE_DISABLE_AUTOUPDATE=true` (required under Nix)
+  - Wrapper prefixes `PATH` with `ripgrep` (and `sysctl` on Darwin), matching nixpkgs
 - **Cross-platform**: `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, `aarch64-darwin`
 
 ## Development
