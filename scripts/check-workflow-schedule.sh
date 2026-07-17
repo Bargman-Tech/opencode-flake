@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-REPO="AodhanHayter/opencode-flake"
+REPO="Bargman-Tech/opencode-flake"
 WORKFLOW_FILE=".github/workflows/update-opencode.yml"
 
 echo "GitHub Actions Scheduled Workflow Diagnostic"
@@ -77,7 +77,7 @@ else
     echo ""
     echo "To activate the scheduled workflow:"
     echo "1. Ensure the workflow file is on the default branch (master/main)"
-    echo "2. Manually trigger it once: gh workflow run update-opencode-nix.yml --repo=$REPO"
+    echo "2. Manually trigger it once: gh workflow run update-opencode.yml --repo=$REPO"
 fi
 
 echo ""

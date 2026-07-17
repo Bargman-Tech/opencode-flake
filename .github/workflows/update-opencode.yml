@@ -12,9 +12,8 @@ name: Update OpenCode with nix-update
 
 on:
   schedule:
-    # Run every 6 hours at 15 minutes past (avoids peak times)
-    # Times: 00:15, 06:15, 12:15, 18:15 UTC
-    - cron: "15 */6 * * *"
+    # Semi-regular: daily at 06:15 UTC
+    - cron: "15 6 * * *"
   workflow_dispatch:
     inputs:
       version:
@@ -32,11 +31,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+        # GITHUB_TOKEN is sufficient (permissions.contents: write covers push/tag/release)
 
       - name: Set up Nix
-        uses: cachix/install-nix-action@v24
+        uses: cachix/install-nix-action@v31
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
@@ -193,7 +191,7 @@ jobs:
 
       - name: Create GitHub Release
         if: steps.update-check.outputs.has-changes == 'true'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.update-check.outputs.new-version }}
           name: OpenCode Flake ${{ steps.update-check.outputs.new-version }}
@@ -208,17 +206,17 @@ jobs:
 
             ```bash
             # Run OpenCode directly
-            nix run github:AodhanHayter/opencode-flake
+            nix run github:Bargman-Tech/opencode-flake
 
             # Or install to your profile
-            nix profile install github:AodhanHayter/opencode-flake
+            nix profile install github:Bargman-Tech/opencode-flake
             ```
 
             ## Using in a flake
 
             ```nix
             {
-              inputs.opencode-flake.url = "github:AodhanHayter/opencode-flake";
+              inputs.opencode-flake.url = "github:Bargman-Tech/opencode-flake";
 
               outputs = { self, nixpkgs, opencode-flake, ... }: {
                 # Use in your outputs

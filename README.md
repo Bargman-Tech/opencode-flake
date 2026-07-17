@@ -2,7 +2,7 @@
 
 This repository packages [OpenCode](https://github.com/sst/opencode), a terminal-based AI assistant for developers, as a Nix flake. OpenCode is developed by SST (Serverless Stack) and provides powerful AI-powered coding assistance directly in your terminal.
 
-This flake automatically stays up-to-date with the latest OpenCode releases through automated workflows that run every 6 hours.
+This flake automatically stays up-to-date with the latest OpenCode releases through an automated workflow that runs daily.
 
 ## Quick Start
 
@@ -65,16 +65,16 @@ nix flake check
 
 This repository features **fully automated maintenance**:
 
-- **Automatic updates**: GitHub Actions workflow runs every 6 hours using `nix-update`
+- **Automatic updates**: GitHub Actions workflow runs daily (06:15 UTC) using `nix-update`
 - **Version detection**: Automatically detects new OpenCode releases from upstream
 - **Auto-deployment**: Updates are automatically tested, tagged, and released
 - **Zero-maintenance**: No manual intervention required for version updates
 
 ### Workflow Status
 
-- Check the [workflow runs](https://github.com/AodhanHayter/opencode-flake/actions/workflows/update-opencode-nix.yml) to see recent updates
+- Check the [workflow runs](https://github.com/Bargman-Tech/opencode-flake/actions/workflows/update-opencode.yml) to see recent updates
 - **Note**: Scheduled workflows are automatically disabled after 60 days of repository inactivity
-- To reactivate: Make any commit or [manually trigger the workflow](https://github.com/AodhanHayter/opencode-flake/actions/workflows/update-opencode-nix.yml)
+- To reactivate: Make any commit or [manually trigger the workflow](https://github.com/Bargman-Tech/opencode-flake/actions/workflows/update-opencode.yml)
 
 ### Manual Updates (if needed)
 
@@ -106,8 +106,8 @@ nix build && nix flake check
 
 ### GitHub Actions Workflows
 
-1. **Automated Updates** (`update-opencode-nix.yml`):
-   - Runs every 6 hours (00:15, 06:15, 12:15, 18:15 UTC)
+1. **Automated Updates** (`update-opencode.yml`):
+   - Runs daily at 06:15 UTC (semi-regular clockwork)
    - Uses `nix-update` for reliable version detection
    - Auto-creates releases and tags
    - Handles errors and cleanup automatically
