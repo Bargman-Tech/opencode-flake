@@ -9,29 +9,29 @@
   testers,
 }:
 let
-  version = "1.18.18";
+  version = "1.18.19";
   # Prebuilt release assets from anomalyco/opencode (formerly sst/opencode).
   # Baseline builds avoid AVX requirements on older x86_64 CPUs.
   srcs = {
     "x86_64-linux" = fetchzip {
       url = "https://github.com/anomalyco/opencode/releases/download/v${version}/opencode-linux-x64-baseline.tar.gz";
       # Unpacked NAR hash (fetchzip); not the raw archive hash
-      hash = "sha256-kqYXN+s6yn+Y5u+dhNhy4j2HhNe1kp4GthB2l8DNnh4=";
+      hash = "sha256-LzIsmzVQjSEXPfYPw2+pQMfSfZQU5dPvCz0eHjHVlDs=";
       stripRoot = false;
     };
     "aarch64-linux" = fetchzip {
       url = "https://github.com/anomalyco/opencode/releases/download/v${version}/opencode-linux-arm64.tar.gz";
-      hash = "sha256-1GWsDoAEzwNtamY3TKIAmQXx4zPuLaQS32sppeq4bwk=";
+      hash = "sha256-/MJvr4m4UCLY4as/Muj/8iA4oRwZYrDUIlSFnoV4SuE=";
       stripRoot = false;
     };
     "aarch64-darwin" = fetchzip {
       url = "https://github.com/anomalyco/opencode/releases/download/v${version}/opencode-darwin-arm64.zip";
-      hash = "sha256-H+EDiYUQMie5kUW/K/egC80AeImppIBXtlbeA/hCkaM=";
+      hash = "sha256-+8zQgo74i21z3l8vfQAS+X95pTIIgMQHp1bYi0fXrwY=";
       stripRoot = false;
     };
     "x86_64-darwin" = fetchzip {
       url = "https://github.com/anomalyco/opencode/releases/download/v${version}/opencode-darwin-x64-baseline.zip";
-      hash = "sha256-z9t1EJ7Q63KWmqz/MCfqV2/tyaSud22Kry94u3eeB8k=";
+      hash = "sha256-uguRCbluK0tDhMalWDi/f9miQbFcyBNIpVH2XUTVQ68=";
       stripRoot = false;
     };
   };
