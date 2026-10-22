@@ -46,27 +46,143 @@ let
   version = packageJson.version;
 
   # ── bun.lock reading ────────────────────────────────────────────────────
-  # bun.lock is JSON with trailing commas. Split on commas and drop only the
-  # separator whose following segment begins with a closing brace/bracket.
-  # Everything else — including the segments themselves — is preserved, so
-  # the result is the source's own lockfile text with only those commas gone.
+  # bun.lock is JSONC whose only extension is trailing commas. The previous
+  # implementation split the whole file on `,` and dropped a comma whenever
+  # the *next segment* began with `}`/`]` — which also deleted a comma INSIDE
+  # a string value that happened to be followed by `}`/`]`, silently corrupting
+  # fields (including integrity values) while `builtins.fromJSON` still
+  # succeeded. That is a supply-chain hazard, not a formatting detail.
+  #
+  # This scanner walks the text character by character and tracks JSON string
+  # state and escapes. A comma is removed only when it is outside a string and
+  # the next non-whitespace character is `}` or `]`. Strings cannot contain a
+  # literal newline, so the scan is line-local; a trailing comma at end of line
+  # is held until the next non-whitespace line proves whether it precedes a
+  # closer.
+  isWs = c: c == " " || c == "\t" || c == "\r";
+
+  scanLine =
+    line:
+    let
+      cs = lib.stringToCharacters line;
+      n = builtins.length cs;
+      at = i: builtins.elemAt cs i;
+      nextNonWs =
+        i:
+        if i >= n then
+          n
+        else if isWs (at i) then
+          nextNonWs (i + 1)
+        else
+          i;
+      go =
+        i: inString: escaped: out: firstNonWs: lastNonWs:
+        if i >= n then
+          {
+            text = lib.concatStrings (lib.reverseList out);
+            inherit firstNonWs;
+            trailingComma = lastNonWs != null && !lastNonWs.inString && lastNonWs.ch == ",";
+          }
+        else
+          let
+            c = at i;
+            firstNonWs' = if firstNonWs == null && !isWs c then c else firstNonWs;
+            lastNonWs' = if isWs c then lastNonWs else { ch = c; inString = inString; };
+          in
+          if inString then
+            if escaped then
+              go (i + 1) true false ([ c ] ++ out) firstNonWs' lastNonWs'
+            else if c == "\\" then
+              go (i + 1) true true ([ c ] ++ out) firstNonWs' lastNonWs'
+            else if c == "\"" then
+              go (i + 1) false false ([ c ] ++ out) firstNonWs' lastNonWs'
+            else
+              go (i + 1) true false ([ c ] ++ out) firstNonWs' lastNonWs'
+          else if c == "\"" then
+            go (i + 1) true false ([ c ] ++ out) firstNonWs' lastNonWs'
+          else if c == "," then
+            let
+              j = nextNonWs (i + 1);
+            in
+            if j < n && (at j == "}" || at j == "]") then
+              go (i + 1) false false out firstNonWs' lastNonWs'
+            else
+              go (i + 1) false false ([ c ] ++ out) firstNonWs' lastNonWs'
+          else
+            go (i + 1) false false ([ c ] ++ out) firstNonWs' lastNonWs';
+    in
+    go 0 false false [ ] null null;
+
+  dropTrailingComma =
+    line:
+    let
+      cs = lib.stringToCharacters line;
+      n = builtins.length cs;
+      at = i: builtins.elemAt cs i;
+      findLast =
+        i:
+        if i < 0 then
+          null
+        else if isWs (at i) then
+          findLast (i - 1)
+        else
+          i;
+      idx = findLast (n - 1);
+    in
+    if idx == null || at idx != "," then
+      line
+    else
+      lib.substring 0 idx line + lib.substring (idx + 1) (n - idx - 1) line;
+
   stripTrailingCommas =
     s:
     let
-      parts = lib.splitString "," s;
-      startsWithClose =
-        part:
-        let
-          t = lib.trim part;
-        in
-        lib.hasPrefix "}" t || lib.hasPrefix "]" t;
-      fix =
-        i: part:
-        if i == 0 || startsWithClose part then part else "," + part;
+      lines = lib.splitString "\n" s;
+      n = builtins.length lines;
+      at = i: builtins.elemAt lines i;
+      go =
+        i: pending: acc:
+        if i >= n then
+          let
+            acc' = if pending == null then acc else lib.reverseList pending ++ acc;
+          in
+          lib.concatStringsSep "\n" (lib.reverseList acc')
+        else
+          let
+            r = scanLine (at i);
+          in
+          if r.firstNonWs == null then
+            if pending == null then
+              go (i + 1) null ([ r.text ] ++ acc)
+            else
+              go (i + 1) (pending ++ [ r.text ]) acc
+          else
+            let
+              acc' =
+                if pending == null then
+                  acc
+                else
+                  let
+                    first = builtins.head pending;
+                    rest = builtins.tail pending;
+                    first' =
+                      if r.firstNonWs == "}" || r.firstNonWs == "]" then
+                        dropTrailingComma first
+                      else
+                        first;
+                    flushed = [ first' ] ++ rest;
+                  in
+                  lib.reverseList flushed ++ acc;
+            in
+            if r.trailingComma then
+              go (i + 1) [ r.text ] acc'
+            else
+              go (i + 1) null ([ r.text ] ++ acc');
     in
-    lib.concatStrings (lib.genList (i: fix i (builtins.elemAt parts i)) (builtins.length parts));
+    go 0 null [ ];
 
-  lock = builtins.fromJSON (stripTrailingCommas (builtins.readFile (opencodeSrc + "/bun.lock")));
+  rawLock = builtins.readFile (opencodeSrc + "/bun.lock");
+  lock = builtins.fromJSON (stripTrailingCommas rawLock);
 
   splitPackageId =
     id:
@@ -119,6 +235,28 @@ let
 
   byId = lib.groupBy (e: e.id) registryEntries;
 
+  # `lib.groupBy` collapses entries that share an id (for example a workspace
+  # alias that resolves to the same registry package). Collapsing must never
+  # paper over a disagreement: every member of a group must carry the same
+  # integrity, otherwise the lockfile is internally inconsistent and the fetch
+  # set would silently pick one of two answers. Prefer a member with a
+  # non-empty URL, but the URL slot is empty for default-registry entries by
+  # design (it is reconstructed from the id).
+  chooseGroup =
+    id: group:
+    let
+      integrities = lib.unique (map (e: e.integrity) group);
+      urls = lib.filter (u: u != "") (map (e: e.url) group);
+    in
+    if builtins.length integrities != 1 then
+      throw "bun.lock integrity disagreement for ${id}: ${lib.concatStringsSep ", " integrities}"
+    else
+      {
+        inherit id;
+        integrity = builtins.head integrities;
+        url = if urls != [ ] then builtins.head urls else (builtins.head group).url;
+      };
+
   # The expression bun2nix's `fetchBunDeps` consumes. Every URL and every
   # integrity value here is derived from the source's bun.lock at eval time.
   bunLockFetchSet =
@@ -127,7 +265,7 @@ let
       (
         id: group:
         let
-          e = builtins.head group;
+          e = chooseGroup id group;
         in
         fetchurl {
           url = if e.url == "" then registryUrl id else e.url;
@@ -135,6 +273,33 @@ let
         }
       )
       byId;
+
+  # Round-trip verification: the parsed lockfile must still agree with the
+  # raw bytes. For every package id, the id itself and *every string slot of
+  # its tuple* must appear verbatim (quoted) in the source text.
+  #
+  # Checking every string slot, rather than assuming one fixed URL index, is
+  # deliberate: bun.lock uses more than one tuple shape. Registry entries are
+  # `[id, url, set, integrity]` (url is empty for the default registry); the
+  # vendored/pkg.pr.new entries are `[id-with-source, set, integrity]`, so the
+  # URL lives inside the identification string; the github entry is
+  # `[id, set, resolved, integrity]`. A fixed `elemAt 1`/`elemAt 3` pair would
+  # silently skip the integrity of every 3-tuple. This check covers the URL
+  # and integrity wherever the tuple puts them, and it is what catches the
+  # string-corrupting stripper the old split-on-comma implementation allowed.
+  lockRoundtripFailures =
+    let
+      contains = needle: builtins.length (lib.splitString needle rawLock) > 1;
+      entryOk =
+        id:
+        let
+          e = lock.packages.${id};
+          strings = builtins.filter builtins.isString e;
+        in
+        contains ("\"" + id + "\"")
+        && builtins.all (s: contains ("\"" + s + "\"")) strings;
+    in
+    builtins.filter (id: !(entryOk id)) (builtins.attrNames lock.packages);
 
   # Patches declared in the lockfile's own `patchedDependencies` are applied
   # to the extracted packages before the cache is assembled. Bun's patcher is
@@ -165,7 +330,6 @@ let
           nativeBuildInputs = [
             patch
             coreutils
-            findutils
           ];
           buildPhase = ''
             runHook preBuild
@@ -173,10 +337,15 @@ let
             ${getExe' coreutils "cp"} -r ${pkg}/. "$out"
             ${getExe' coreutils "chmod"} -R u+w "$out"
 
-            # Reject detection: a hunk that does not apply is a build failure, with
-            # the reject text in the log. `patch` already exits non-zero, but the
-            # reject file is checked explicitly so a `--forward`-style change can
-            # never turn a rejected hunk into a silently unpatched dependency.
+            # Reject detection has exactly two live detectors:
+            #   1. `patch`'s exit status — a hunk that does not apply fails the
+            #      derivation immediately; and
+            #   2. the reject file named by `--reject-file`, checked for
+            #      non-emptiness after a successful exit, so a future
+            #      `--forward`-style change cannot turn a rejected hunk into a
+            #      silently unpatched dependency.
+            # `--reject-file` sends rejects to $TMPDIR, never into $out, so a
+            # `find "$out" -name '*.rej'` would be dead code; it is not used.
             reject="$TMPDIR/rejects-${lib.strings.sanitizeDerivationName name}"
             if ! ${getExe patch} -p1 --fuzz=${toString (patchFuzz.${name} or 0)} \
                  --reject-file="$reject" -d "$out" < ${patchFile}; then
@@ -187,10 +356,6 @@ let
             if [ -e "$reject" ] && [ -s "$reject" ]; then
               ${getExe' coreutils "echo"} "patch produced rejects for ${name} (fuzz=${toString (patchFuzz.${name} or 0)})" >&2
               ${getExe' coreutils "cat"} "$reject" >&2
-              exit 1
-            fi
-            if [ -n "$(${getExe' findutils "find"} "$out" -name '*.rej' -print -quit)" ]; then
-              ${getExe' coreutils "echo"} "patch left a .rej file for ${name}" >&2
               exit 1
             fi
 
@@ -335,10 +500,27 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     runHook postInstall
   '';
 
-  passthru.tests.version = testers.testVersion {
-    package = finalAttrs.finalPackage;
-    command = "HOME=$(${getExe' coreutils "mktemp"} -d) ${getExe finalAttrs.finalPackage} --version";
-    inherit version;
+  passthru = {
+    tests.version = testers.testVersion {
+      package = finalAttrs.finalPackage;
+      command = "HOME=$(${getExe' coreutils "mktemp"} -d) ${getExe finalAttrs.finalPackage} --version";
+      inherit version;
+    };
+
+    # Exposure for the flake's lock round-trip check (and for humans): the
+    # raw text the parser saw and the parsed package map.
+    bunLock = {
+      text = rawLock;
+      packages = lock.packages;
+    };
+
+    # Lazily evaluated: a check that touches this attribute proves that every
+    # parsed entry still appears verbatim in the source lockfile.
+    bunLockRoundtrip =
+      if lockRoundtripFailures == [ ] then
+        "ok"
+      else
+        throw "bun.lock round-trip failed for: ${lib.concatStringsSep ", " lockRoundtripFailures}";
   };
 
   meta = with lib; {
