@@ -419,6 +419,12 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   inherit version;
   src = opencodeSrc;
 
+  # Phase 5.1 (LLM-CORE dual-generation plan): honour the explicit
+  # OPENCODE_APP_NAME / OPENCODE_DATA_HOME / OPENCODE_STATE_HOME /
+  # OPENCODE_CACHE_HOME contract while preserving every XDG default. The
+  # paths themselves stay per-machine and come from the NixOS module.
+  patches = [ ./patches/opencode-state-paths-v1.patch ];
+
   nativeBuildInputs = [
     bun
     nodejs

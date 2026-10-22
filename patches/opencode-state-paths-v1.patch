@@ -1,0 +1,33 @@
+Phase 5.1 (LLM-CORE dual-generation plan): explicit state-root overrides for
+opencode V1, in packages/core/src/global.ts.
+
+Every existing default is preserved byte for byte: each variable only
+replaces its value when it is set.
+
+  app    = OPENCODE_APP_NAME   ?? "opencode"
+  data   = OPENCODE_DATA_HOME  ?? path.join(xdgData!,  app)
+  cache  = OPENCODE_CACHE_HOME ?? path.join(xdgCache!, app)
+  state  = OPENCODE_STATE_HOME ?? path.join(xdgState!, app)
+  config = Flag.OPENCODE_CONFIG_DIR ?? Path.config   (unchanged)
+
+The concrete roots are per-machine and are supplied by the NixOS module's
+`opencode` wrapper, not by this package.
+
+--- a/packages/core/src/global.ts	2026-10-22 11:44:34.227784620 +0000
++++ b/packages/core/src/global.ts	2026-10-22 11:45:00.346003024 +0000
+@@ -7,11 +7,11 @@
+ import { Flag } from "./flag/flag"
+ import { makeGlobalNode } from "./effect/app-node"
+ 
+-const app = "opencode"
+-const data = path.join(xdgData!, app)
+-const cache = path.join(xdgCache!, app)
++const app = process.env.OPENCODE_APP_NAME ?? "opencode"
++const data = process.env.OPENCODE_DATA_HOME ?? path.join(xdgData!, app)
++const cache = process.env.OPENCODE_CACHE_HOME ?? path.join(xdgCache!, app)
+ const config = path.join(xdgConfig!, app)
+-const state = path.join(xdgState!, app)
++const state = process.env.OPENCODE_STATE_HOME ?? path.join(xdgState!, app)
+ const tmp = path.join(os.tmpdir(), app)
+ 
+ const paths = {
