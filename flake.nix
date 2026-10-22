@@ -85,6 +85,22 @@
         {
           opencode = self.packages.${system}.opencode;
           opencode-version = self.packages.${system}.opencode.passthru.tests.version;
+
+          # ── Dead code detection ───────────────────────────────────────────
+          # Same mechanism as LLM-CORE's check: `--no-lambda-pattern-names`
+          # keeps function argument sets (`{ pkgs, system }`) from being
+          # reported as dead bindings.
+          deadnix = pkgs.writeShellApplication {
+            name = "run-deadnix";
+            meta.description = "Detect dead Nix code";
+            runtimeInputs = [ pkgs.deadnix ];
+            text = ''exec deadnix --no-lambda-pattern-names "${self}"'';
+          };
+
+          # ── Format check ──────────────────────────────────────────────────
+          formatting = pkgs.runCommand "check-formatting"
+            { buildInputs = [ pkgs.nixpkgs-fmt ]; }
+            "nixpkgs-fmt --check ${self} && touch $out";
         }
       );
     };

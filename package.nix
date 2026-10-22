@@ -18,23 +18,23 @@
 # either this input tree itself or reachable only from packages/app,
 # packages/console/*, packages/stats/* and packages/enterprise — never from
 # packages/opencode, the only workspace this build installs for.
-{
-  lib,
-  stdenv,
-  stdenvNoCC,
-  bun,
-  bun2nix,
-  coreutils,
-  findutils,
-  nodejs,
-  patch,
-  patchelf,
-  makeBinaryWrapper,
-  ripgrep,
-  sysctl,
-  models-dev,
-  testers,
-  opencodeSrc,
+{ lib
+, stdenv
+, stdenvNoCC
+, bun
+, bun2nix
+, coreutils
+, findutils
+, nodejs
+, patch
+, patchelf
+, makeBinaryWrapper
+, ripgrep
+, sysctl
+, models-dev
+, testers
+, opencodeSrc
+,
 }:
 let
   inherit (lib)
@@ -102,17 +102,19 @@ let
   isRegistryEntry = entry: builtins.length entry == 4 && builtins.isString (builtins.elemAt entry 1) && builtins.elemAt entry 3 != "";
 
   registryEntries = lib.filter (e: e != null) (
-    lib.mapAttrsToList (
-      _key: entry:
-      if !(isRegistryEntry entry) then
-        null
-      else
-        {
-          id = builtins.elemAt entry 0;
-          url = builtins.elemAt entry 1;
-          integrity = builtins.elemAt entry 3;
-        }
-    ) lock.packages
+    lib.mapAttrsToList
+      (
+        _key: entry:
+          if !(isRegistryEntry entry) then
+            null
+          else
+            {
+              id = builtins.elemAt entry 0;
+              url = builtins.elemAt entry 1;
+              integrity = builtins.elemAt entry 3;
+            }
+      )
+      lock.packages
   );
 
   byId = lib.groupBy (e: e.id) registryEntries;
@@ -121,43 +123,86 @@ let
   # integrity value here is derived from the source's bun.lock at eval time.
   bunLockFetchSet =
     { fetchurl, ... }:
-    lib.mapAttrs (
-      id: group:
-      let
-        e = builtins.head group;
-      in
-      fetchurl {
-        url = if e.url == "" then registryUrl id else e.url;
-        hash = e.integrity;
-      }
-    ) byId;
+    lib.mapAttrs
+      (
+        id: group:
+        let
+          e = builtins.head group;
+        in
+        fetchurl {
+          url = if e.url == "" then registryUrl id else e.url;
+          hash = e.integrity;
+        }
+      )
+      byId;
 
   # Patches declared in the lockfile's own `patchedDependencies` are applied
   # to the extracted packages before the cache is assembled. Bun's patcher is
-  # whitespace-tolerant; `patch` is run with matching fuzz so the same patch
-  # set lands identically here.
-  patchOverrides = lib.mapAttrs (
-    name: patchFile:
-    pkg:
-    stdenvNoCC.mkDerivation {
-      pname = "patched-${lib.strings.sanitizeDerivationName name}";
-      version = "0";
-      dontUnpack = true;
-      nativeBuildInputs = [ patch ];
-      buildPhase = ''
-        runHook preBuild
-        ${getExe' coreutils "mkdir"} -p "$out"
-        ${getExe' coreutils "cp"} -r ${pkg}/. "$out"
-        ${getExe' coreutils "chmod"} -R u+w "$out"
-        ${getExe patch} -p1 --fuzz=3 -d "$out" < ${patchFile}
-        runHook postBuild
-      '';
-      installPhase = ''
-        runHook preInstall
-        runHook postInstall
-      '';
-    }
-  ) (lib.mapAttrs (_name: path: opencodeSrc + "/${path}") (lock.patchedDependencies or { }));
+  # whitespace-tolerant; `patch` is not, unless fuzz is allowed.
+  #
+  # Fuzz is recorded per patch instead of applied blindly to every dependency.
+  # Measured against the registry tarballs the lockfile names at v1.19.3, 17 of
+  # the 19 patches apply at fuzz 0. Only these two need fuzz 3:
+  #   * @silvia-odwyer/photon-node@0.3.4 — hunk #10 of 10 lands with offset
+  #     drift in photon_rs.js;
+  #   * @ai-sdk/google@3.0.73 — the single hunk in
+  #     src/convert-to-google-generative-ai-messages.ts lands with offset drift.
+  # A patch that needs more than 3 is a signal to re-derive it, not to raise
+  # the number: rejects fail the build below.
+  patchFuzz = {
+    "@silvia-odwyer/photon-node@0.3.4" = 3;
+    "@ai-sdk/google@3.0.73" = 3;
+  };
+
+  patchOverrides = lib.mapAttrs
+    (
+      name: patchFile:
+        pkg:
+        stdenvNoCC.mkDerivation {
+          pname = "patched-${lib.strings.sanitizeDerivationName name}";
+          version = "0";
+          dontUnpack = true;
+          nativeBuildInputs = [
+            patch
+            coreutils
+            findutils
+          ];
+          buildPhase = ''
+            runHook preBuild
+            ${getExe' coreutils "mkdir"} -p "$out"
+            ${getExe' coreutils "cp"} -r ${pkg}/. "$out"
+            ${getExe' coreutils "chmod"} -R u+w "$out"
+
+            # Reject detection: a hunk that does not apply is a build failure, with
+            # the reject text in the log. `patch` already exits non-zero, but the
+            # reject file is checked explicitly so a `--forward`-style change can
+            # never turn a rejected hunk into a silently unpatched dependency.
+            reject="$TMPDIR/rejects-${lib.strings.sanitizeDerivationName name}"
+            if ! ${getExe patch} -p1 --fuzz=${toString (patchFuzz.${name} or 0)} \
+                 --reject-file="$reject" -d "$out" < ${patchFile}; then
+              ${getExe' coreutils "echo"} "patch failed for ${name}" >&2
+              if [ -s "$reject" ]; then ${getExe' coreutils "cat"} "$reject" >&2; fi
+              exit 1
+            fi
+            if [ -e "$reject" ] && [ -s "$reject" ]; then
+              ${getExe' coreutils "echo"} "patch produced rejects for ${name} (fuzz=${toString (patchFuzz.${name} or 0)})" >&2
+              ${getExe' coreutils "cat"} "$reject" >&2
+              exit 1
+            fi
+            if [ -n "$(${getExe' findutils "find"} "$out" -name '*.rej' -print -quit)" ]; then
+              ${getExe' coreutils "echo"} "patch left a .rej file for ${name}" >&2
+              exit 1
+            fi
+
+            runHook postBuild
+          '';
+          installPhase = ''
+            runHook preInstall
+            runHook postInstall
+          '';
+        }
+    )
+    (lib.mapAttrs (_name: path: opencodeSrc + "/${path}") (lock.patchedDependencies or { }));
 
   bunCpu = if stdenv.hostPlatform.isAarch64 then "arm64" else "x64";
   bunOs = if stdenv.hostPlatform.isLinux then "linux" else "darwin";
@@ -271,13 +316,21 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     # Match nixpkgs runtime hardening:
     # - OPENCODE_DISABLE_AUTOUPDATE: never self-upgrade out from under Nix
     # - PATH += ripgrep: codebase search / tools that shell out to `rg`
+    # - OPENCODE_DISABLE_EMBEDDED_WEB_UI: this build passes
+    #   `--skip-embed-web-ui`, so there is no `opencode-web-ui.gen.ts` bundle
+    #   and upstream's `embeddedUI()` would return null anyway. Setting the
+    #   upstream flag (defined in src/effect/runtime-flags.ts as
+    #   `disableEmbeddedWebUi: bool("OPENCODE_DISABLE_EMBEDDED_WEB_UI")`)
+    #   makes `opencode web`'s proxy to https://app.opencode.ai an explicit
+    #   choice rather than an accident of the missing file.
     wrapProgram "$out/bin/opencode" \
       --prefix PATH : ${
         lib.makeBinPath (
           [ ripgrep ] ++ lib.optionals stdenv.hostPlatform.isDarwin [ sysctl ]
         )
       } \
-      --set OPENCODE_DISABLE_AUTOUPDATE true
+      --set OPENCODE_DISABLE_AUTOUPDATE true \
+      --set OPENCODE_DISABLE_EMBEDDED_WEB_UI true
 
     runHook postInstall
   '';

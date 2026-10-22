@@ -1,8 +1,8 @@
 # OpenCode Nix Flake
 
-This repository packages [OpenCode](https://github.com/anomalyco/opencode), a terminal-based AI assistant for developers, as a Nix flake using **prebuilt release binaries**.
+This repository packages [OpenCode](https://github.com/anomalyco/opencode), a terminal-based AI assistant for developers, as a Nix flake **built from the upstream source**. There is no release binary and no hand-written hash: the source is the `opencode` flake input, the version is read from that source's `packages/opencode/package.json`, and the dependency tree is derived from that source's `bun.lock`.
 
-This flake automatically stays up-to-date with the latest OpenCode releases through an automated workflow that runs daily.
+Moving upstream means moving the `opencode` input rev and re-locking (`./update.sh`) — there is no version string or platform hash to edit.
 
 ## Quick Start
 
@@ -39,12 +39,15 @@ nix profile install github:Bargman-Tech/opencode-flake
 
 ## Packaging
 
-- **Prebuilt binaries**: Downloads official release assets from [anomalyco/opencode](https://github.com/anomalyco/opencode)
-- **Baseline x86_64 builds**: Uses non-AVX baseline tarballs for broader CPU compatibility
+- **Source build**: compiles the CLI from the `opencode` flake input (a pin on upstream tag v1.19.3) with a `bun` pinned by nixpkgs
+- **Version is derived**: read from the source's `packages/opencode/package.json` at evaluation time — never transcribed into this repository
+- **Dependencies are lockfile-derived**: `bun2nix.fetchBunDeps` turns upstream's own `bun.lock` into a fetch set using the integrity values already in that lockfile, then `bun install --frozen-lockfile` installs offline. No dependency hash is written here
 - **NixOS runtime fixups**:
-  - `patchelf` sets the store dynamic linker (Linux)
+  - `patchelf` sets the store dynamic linker (Linux), only when the Bun binary carries an interpreter
   - Wrapper sets `OPENCODE_DISABLE_AUTOUPDATE=true` (required under Nix)
   - Wrapper prefixes `PATH` with `ripgrep` (and `sysctl` on Darwin), matching nixpkgs
+  - Wrapper sets `OPENCODE_DISABLE_EMBEDDED_WEB_UI=true`: the source build does not embed the web UI bundle (`--skip-embed-web-ui`), so `opencode web` proxies to upstream's UI at runtime. Setting the flag makes that an explicit choice, not an accident of a missing file
+- **Lockfile patches**: upstream's `patchedDependencies` are applied with a recorded per-patch fuzz (`@ai-sdk/google@3.0.73` and `@silvia-odwyer/photon-node@0.3.4` need fuzz 3; the rest apply at fuzz 0), and the build fails if any patch produces rejects
 - **Cross-platform**: `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, `aarch64-darwin`
 
 ## Development
@@ -62,30 +65,27 @@ nix flake check
 
 ## Automated Maintenance
 
-This repository features **fully automated maintenance**:
+Maintenance is **manual by design**:
 
-- **Automatic updates**: GitHub Actions workflow runs daily (06:15 UTC) using `nix-update`
-- **Version detection**: Detects new OpenCode releases from upstream
-- **Validate-before-push**: Builds and runs `--version` before committing
-- **Auto-deployment**: Updates are tagged and released after validation
+- **Input-rev bump**: `./update.sh [<tag>]` rewrites the `opencode` input rev in `flake.nix` and re-locks. It refuses to write a `version =` line
+- **No daily cron**: the scheduled job was disabled because there is no version string or release-asset hash left to refresh; a scheduled sed would reintroduce the pin model this flake removed
+- **Validate-before-push**: the dispatched workflow builds and runs `--version` before committing
+- **Auto-tagging**: the manual workflow tags and releases the derived version after validation
 
 ### Workflow Status
 
 - Check the [workflow runs](https://github.com/Bargman-Tech/opencode-flake/actions/workflows/update-opencode.yml) to see recent updates
-- **Note**: Scheduled workflows are automatically disabled after 60 days of repository inactivity
-- To reactivate: Make any commit or [manually trigger the workflow](https://github.com/Bargman-Tech/opencode-flake/actions/workflows/update-opencode.yml)
+- The workflow runs on `workflow_dispatch` only
 
-### Manual Updates (if needed)
+### Manual Updates
 
 ```bash
-# Update to latest version (needs nix-update)
-nix-update --flake opencode
-
-# If platform hashes need recovery
-./scripts/update-vendor-hash.sh
+# Move the opencode input to the latest upstream release (or ./update.sh 1.19.3)
+./update.sh
 
 # Build and test
-nix build && nix flake check
+nix build --option builders ''
+nix flake check --option builders ''
 ```
 
 ## Supported Systems
@@ -97,21 +97,20 @@ nix build && nix flake check
 
 ## Repository Structure
 
-- `flake.nix`: Minimal flake packaging outputs
-- `package.nix`: Prebuilt binary package definition
-- `.github/workflows/update-opencode.yml`: Daily update clockwork
-- `scripts/update-vendor-hash.sh`: Hash recovery helper
+- `flake.nix`: Flake outputs — the `opencode` source input, the package, the checks
+- `package.nix`: Source-build package definition (version from `package.json`, deps from `bun.lock`)
+- `.github/workflows/update-opencode.yml`: Manual input-rev bump (no cron)
+- `scripts/update-vendor-hash.sh`: Retired hard-fail stub — the vendor-hash model is gone; use `./update.sh`
 
 ## CI/CD & Automation
 
 ### GitHub Actions Workflows
 
-1. **Automated Updates** (`update-opencode.yml`):
-   - Runs daily at 06:15 UTC (semi-regular clockwork)
-   - Uses `nix-update` for version detection
+1. **Input-rev bump** (`update-opencode.yml`):
+   - Runs on `workflow_dispatch` only (the daily 06:15 UTC cron is disabled)
+   - Calls `./update.sh`, which moves the `opencode` input rev and re-locks
    - Validates with `nix build` / `nix flake check` before push
-   - Auto-creates releases and tags
-   - Can be manually triggered via GitHub Actions UI
+   - Auto-creates releases and tags from the derived version
 
 ## License
 

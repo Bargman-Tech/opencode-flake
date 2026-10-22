@@ -1,79 +1,33 @@
 #!/usr/bin/env bash
-# Recompute fetchzip hashes for all platform release assets.
-# Uses a temporary fetchzip expression so hashes match package.nix exactly.
+# REMOVED MECHANISM — this script is a hard-fail stub, kept only so that an
+# old caller (or an old habit) fails loudly instead of silently writing a pin.
+#
+# The vendor-hash model is gone. There is no release tarball, no per-platform
+# release asset and no hand-written hash in this repository. The CLI is a
+# source build whose dependency tree is derived from the upstream source's own
+# bun.lock (integrity values already recorded there), and whose source is a
+# flake input.
+#
+# The legitimate bump path is therefore an INPUT-REV bump:
+#   ./update.sh
+# which rewrites the `opencode` input rev in flake.nix and re-locks.
+#
+# This stub writes nothing and always exits non-zero.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT"
+cat >&2 <<'MESSAGE'
+error: update-vendor-hash.sh is retired.
 
-VERSION=$(grep -oP 'version = "\K[^"]+' package.nix | head -1)
-echo "Version: ${VERSION}"
+The vendor-hash pin model was removed in favour of lockfile-derived pins:
+  * source:      the `opencode` flake input (flake.nix / flake.lock)
+  * version:     upstream packages/opencode/package.json, read at eval time
+  * dependencies: upstream bun.lock via bun2nix.fetchBunDeps (integrity from
+                  the lockfile; no hash is written in this repository)
 
-BASE="https://github.com/anomalyco/opencode/releases/download/v${VERSION}"
+There is no release-asset hash to recompute. To move upstream, bump the input rev:
+  ./update.sh
 
-declare -A ASSETS=(
-  ["x86_64-linux"]="opencode-linux-x64-baseline.tar.gz"
-  ["aarch64-linux"]="opencode-linux-arm64.tar.gz"
-  ["aarch64-darwin"]="opencode-darwin-arm64.zip"
-  ["x86_64-darwin"]="opencode-darwin-x64-baseline.zip"
-)
+This script intentionally writes no file and exits non-zero.
+MESSAGE
 
-prefetch_fetchzip_hash() {
-  local url="$1"
-  local expr
-  # empty outputHash forces Nix to report the correct hash
-  expr=$(cat <<NIX
-let
-  pkgs = import <nixpkgs> {};
-in
-pkgs.fetchzip {
-  url = "${url}";
-  hash = "";
-  stripRoot = false;
-}
-NIX
-)
-  local output
-  if output=$(nix-build --expr "$expr" --no-out-link 2>&1); then
-    echo "Unexpected success prefetching ${url}" >&2
-    exit 1
-  fi
-  local got
-  got=$(echo "$output" | grep -oE 'got:[[:space:]]+sha256-[A-Za-z0-9+/=]+' | head -1 | sed 's/got:[[:space:]]*//')
-  if [[ -z "$got" ]]; then
-    echo "Failed to extract hash for ${url}" >&2
-    echo "$output" >&2
-    exit 1
-  fi
-  echo "$got"
-}
-
-for system in x86_64-linux aarch64-linux aarch64-darwin x86_64-darwin; do
-  asset="${ASSETS[$system]}"
-  url="${BASE}/${asset}"
-  echo "Prefetching fetchzip hash for ${asset} (${system})..."
-  new_hash=$(prefetch_fetchzip_hash "$url")
-  echo "  ${system}: ${new_hash}"
-
-  python3 - "$asset" "$new_hash" <<'PY'
-import re, sys
-asset, new_hash = sys.argv[1], sys.argv[2]
-path = "package.nix"
-text = open(path).read()
-pattern = re.compile(
-    r'(url = "[^"]*' + re.escape(asset) + r'";\s*\n(?:\s*#[^\n]*\n)?\s*hash = ")sha256-[^"]+(")',
-    re.M,
-)
-new_text, n = pattern.subn(r"\1" + new_hash + r"\2", text, count=1)
-if n != 1:
-    sys.stderr.write(f"Could not locate hash for asset {asset} (replacements={n})\n")
-    sys.exit(1)
-open(path, "w").write(new_text)
-print(f"Updated hash for {asset}")
-PY
-done
-
-echo "Verifying build for current system..."
-nix build .#opencode -L --option builders ''
-./result/bin/opencode --version
-echo "All platform hashes updated."
+exit 1
